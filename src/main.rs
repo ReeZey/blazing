@@ -26,8 +26,8 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr) {
     let buf_reader = BufReader::new(&mut stream);
     let http_request: Vec<_> = buf_reader
         .lines()
-        .map(|result| result.unwrap())
-        .take_while(|line| !line.is_empty())
+        .filter_map(|result| result.ok()) // Filter out errors and unwrap Result values
+        .take_while(|line| !line.is_empty()) // Handle empty lines
         .collect();
 
     if http_request.len() == 0 { return send_respone(&mut stream, format_response(418, "why u send no data 🤨")); };
