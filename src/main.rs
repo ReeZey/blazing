@@ -2,6 +2,8 @@ mod http_data;
 
 use std::{net::{TcpStream, TcpListener, SocketAddr}, io::{Write, BufReader, BufRead, Read}, path::Path, fs::{File, self}};
 use crate::http_data::HTTPResponse;
+use rhai::{Engine, packages::Package};
+use rhai_fs::FilesystemPackage;
 
 fn main() {
     if !Path::new("public").exists() {
@@ -81,6 +83,33 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr) {
 
     if !filepath.exists() {
         return send_respone(&mut stream, format_response(404, "file not found"));
+    }
+
+    match filepath.extension() {
+        Some(ext) => {
+            if ext == "rhai" {
+                let mut engine = Engine::new();
+
+                // Create filesystem package and add the package into the engine
+                let package = FilesystemPackage::new();
+                package.register_into_engine(&mut engine);
+
+
+                // Print the contents of the file `Cargo.toml`.
+                let engine_exec = engine.eval_file::<String>(filepath.to_path_buf());
+                
+                match engine_exec {
+                    Ok(contents) => {
+                        return send_respone(&mut stream, format_response(200, &contents));
+                    }
+                    Err(e) => {
+                        println!("err: {e}");
+                        return send_respone(&mut stream, format_response(500, "error compile"));
+                    }
+                }
+            }
+        }
+        None => {}
     }
 
     let mut buffer = vec![];

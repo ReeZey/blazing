@@ -8,3 +8,5 @@ edition = "2021"
 [dependencies]
 httpdate = "1.0.2"
 infer = "0.13.0"
+rhai = "1.14.0"
+rhai-fs = "0.1.2"
