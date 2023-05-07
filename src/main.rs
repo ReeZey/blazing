@@ -55,6 +55,8 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr) {
     let public = Path::new("public");
     match protocol {
         "GET" => {
+            file = file.replace("%20", " ");
+
             if !file.ends_with("/") && Path::new(&format!("public{}", &file)).is_dir() {
                 file += "/";
                 return redirect(&mut stream, &file);
