@@ -61,8 +61,8 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
     }
     //println!("{:#?}", request_data);
 
-    let root_location = config.get("root_location").expect("can't find root location  variable");
-    let public_path = Path::new(root_location);
+    let root_location = get_config(&config, "root_location");
+    let public_path = Path::new(&root_location);
     let mut file = urlencoding::decode(&http_path).unwrap().into_owned();
     file = file.trim_start_matches("/").to_string();
     let mut file_path = &public_path.join(&file);
