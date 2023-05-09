@@ -1,0 +1,6 @@
+#where to store files
+root_location = "public"
+
+enable_uploads = true
+#where to put uploads
+uploads_location = "public/upload"

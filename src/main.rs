@@ -5,10 +5,20 @@ use http_data::HTTPResponse;
 use rand::{Rng, distributions::Alphanumeric};
 use rhai::{Engine, packages::Package};
 use rhai_fs::FilesystemPackage;
+use config::Config;
 
 fn main() {
-    if !Path::new("public").exists() {
-        fs::create_dir("public").unwrap();
+    let settings = Config::builder()
+        .add_source(config::File::with_name("settings"))
+        .add_source(config::Environment::with_prefix("APP"))
+        .build()
+        .unwrap();
+
+    let config: HashMap<String, String> = settings.try_deserialize::<HashMap<String, String>>().unwrap();
+    let public = config.get("root_location").expect("can't find root location  variable");
+
+    if !Path::new(public).exists() {
+        fs::create_dir(public).unwrap();
     }
     
     let server = TcpListener::bind("0.0.0.0:51413").expect("could not start server");
@@ -16,7 +26,7 @@ fn main() {
     loop {
         match server.accept() {
             Ok((stream, socket)) => {
-                handle_connection(stream, socket);
+                handle_connection(stream, socket, config.clone());
             },
             Err(e) => {
                 println!("something bad happened idk err: {}", e.to_string());
@@ -25,7 +35,7 @@ fn main() {
     }
 }
 
-fn handle_connection(mut stream: TcpStream, socket: SocketAddr) {
+fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<String, String>) {
     let buf_reader = BufReader::new(&mut stream);
     let http_request: Vec<_> = buf_reader
         .lines()
@@ -39,7 +49,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr) {
     let stuffs: Vec<&str> = http_request[0].split(" ").collect();
     if stuffs.len() != 3 { return send_respone(&mut stream, format_response(400, "wrongful usage majj")); };
 
-    let [protocol, path, _http]: [&str; 3] = stuffs.try_into().unwrap();
+    let [protocol, http_path, _http]: [&str; 3] = stuffs.try_into().unwrap();
 
     let mut request_data: HashMap<String, String> = HashMap::new();
     for request in &http_request {
@@ -49,27 +59,26 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr) {
 
         request_data.insert(req[0].to_lowercase().to_owned(), req[1].trim_start().to_owned());
     }
-
     //println!("{:#?}", request_data);
-    let mut file = path.to_string();
-    let public = Path::new("public");
+
+    let root_location = config.get("root_location").expect("can't find root location  variable");
+    let public_path = Path::new(root_location);
+    let mut file = urlencoding::decode(&http_path).unwrap().into_owned();
+    file = file.trim_start_matches("/").to_string();
+    let mut file_path = &public_path.join(&file);
+
+    println!("{} -> {} /{}", socket.ip(), protocol, file);
+
     match protocol {
         "GET" => {
-            file = file.replace("%20", " ");
-
-            if !file.ends_with("/") && Path::new(&format!("public{}", &file)).is_dir() {
-                file += "/";
-                return redirect(&mut stream, &file);
+            if file.len() > 0 && file_path.is_dir() && !file.ends_with("/") {
+                return redirect(&mut stream, &format!("{}/", &file));
             }
-        
-            let stringpath = format!("public{}", &file);
-            println!("{} -> {}", socket.ip(), stringpath);
-            let mut filepath = Path::new(&stringpath);
-        
-            let indexed_file = filepath.join("index.html");
-            if filepath.is_dir() {
+            
+            let indexed_file = file_path.join("index.html");
+            if file_path.is_dir() {
                 if indexed_file.exists() {
-                    filepath = &indexed_file;
+                    file_path = &indexed_file;
                 }else {
                     let parent_dir = indexed_file.parent().unwrap();
         
@@ -93,11 +102,11 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr) {
                 }
             }
         
-            if !filepath.exists() {
+            if !file_path.exists() {
                 return send_respone(&mut stream, format_response(404, "file not found"));
             }
         
-            match filepath.extension() {
+            match file_path.extension() {
                 Some(ext) => {
                     if ext == "rhai" {
                         let mut engine = Engine::new();
@@ -111,7 +120,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr) {
                             return format!("you are welcome {who}!");
                         });
         
-                        let engine_exec = engine.eval_file::<String>(filepath.to_path_buf());
+                        let engine_exec = engine.eval_file::<String>(file_path.to_path_buf());
                         
                         match engine_exec {
                             Ok(contents) => {
@@ -128,7 +137,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr) {
             }
         
             let mut buffer = vec![];
-            let mut file = File::open(&filepath).unwrap();
+            let mut file = File::open(&file_path).unwrap();
             file.read_to_end(&mut buffer).unwrap();
         
             let mut http_response = HTTPResponse::default();
@@ -137,6 +146,10 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr) {
             send_respone(&mut stream, http_response);
         },
         "PUT" => {
+            //get_config
+            if get_config(&config, "enable_uploads") != "true" { return send_respone(&mut stream, format_response(444, "not enabled")); };
+            if http_path != "/upload" { return send_respone(&mut stream, format_response(400, "va?")); };
+
             let file_length = match request_data.get("content-length") {
                 Some(string) => {
                     match string.parse::<usize>() {
@@ -150,10 +163,12 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr) {
             if file_length == 0 { return send_respone(&mut stream, format_response(411, "length is zero")); }
             if file_length > 50_000_000 { return send_respone(&mut stream, format_response(413, "file is larger than 50mb")); }
 
-            println!("lenght: {}", file_length);
-
             let mut buffer = vec![0; file_length];
-            stream.read_exact(&mut buffer).expect("could not read buffer");
+            let try_read = stream.read_exact(&mut buffer);
+            if try_read.is_err() {
+                println!("transfer error: {}", try_read.unwrap_err());
+                return send_respone(&mut stream, format_response(200, "hejsan"));
+            }
 
             let extension = match infer::get(&buffer) {
                 Some(mime) => mime.extension(),
@@ -166,13 +181,19 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr) {
                                 .map(char::from)
                                 .collect();
 
-            
-            let path: PathBuf = PathBuf::new().join("upload").join(format!("{filename}.{extension}"));
-            let mut file = File::create(public.join(&path)).expect("could not create file");
+            let directory = get_config(&config, "uploads_location");
+            let path = Path::new(&directory);
+
+            if !path.exists() {
+                fs::create_dir_all(path).expect("could not create paths for uploads_location");
+            }
+
+            let path_buf: PathBuf = path.join(format!("{filename}.{extension}"));
+            let mut file = File::create(&path_buf).expect("could not create file");
 
             file.write_all(&mut buffer).expect("could not write file");
 
-            return send_respone(&mut stream, format_response(200, &path.as_path().to_str().unwrap()));
+            return send_respone(&mut stream, format_response(200, &path_buf.as_path().to_str().unwrap()));
         },
         _ => {}
     }
@@ -190,5 +211,11 @@ fn format_response(status: i32, response: &str) -> HTTPResponse {
 }
 
 fn send_respone(stream: &mut TcpStream, data: HTTPResponse) {
-    stream.write_all(&data.format()).unwrap();
+    if stream.write_all(&data.format()).is_err() {
+        drop(stream);
+    }
+}
+
+fn get_config(config: &HashMap<String, String>, key: &str) -> String {
+    return config.get(&key.to_owned()).expect(&format!("could not find config key {}, did you possibly delete it?", key)).to_owned();
 }
