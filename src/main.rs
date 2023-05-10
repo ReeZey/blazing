@@ -51,23 +51,29 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
 
     let [protocol, http_path, _http]: [&str; 3] = stuffs.try_into().unwrap();
 
-    let mut request_data: HashMap<String, String> = HashMap::new();
+    let mut request_headers: HashMap<String, String> = HashMap::new();
     for request in &http_request {
         let req = request.split(":").collect::<Vec<&str>>();
         if req.len() != 2 { continue; }
-        if request_data.contains_key(req[0]) { return send_respone(&mut stream, format_response(400, "key existed twice"))};
+        if request_headers.contains_key(req[0]) { return send_respone(&mut stream, format_response(400, "header existed twice"))};
 
-        request_data.insert(req[0].to_lowercase().to_owned(), req[1].trim_start().to_owned());
+        request_headers.insert(req[0].to_lowercase().to_owned(), req[1].trim_start().to_owned());
     }
     //println!("{:#?}", request_data);
 
     let root_location = get_config(&config, "root_location");
-    let public_path = Path::new(&root_location);
-    let mut file = urlencoding::decode(&http_path).unwrap().into_owned();
-    file = file.trim_start_matches("/").to_string();
-    let mut file_path = &public_path.join(&file);
+    let file = urlencoding::decode(&http_path).unwrap().into_owned();
+    let file_string = format!("{}{}", root_location, file);
+    let mut file_path = Path::new(&file_string);
 
-    println!("{} -> {} /{}", socket.ip(), protocol, file);
+    let socket_ip = socket.ip().to_string();
+    let ip = if let Some(header_ip) = request_headers.get("x-real-ip") {
+        header_ip
+    }else {
+        &socket_ip
+    };
+
+    println!("{} -> {} {}", ip, protocol, file);
 
     match protocol {
         "GET" => {
@@ -150,7 +156,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
             if get_config(&config, "enable_uploads") != "true" { return send_respone(&mut stream, format_response(444, "not enabled")); };
             if http_path != "/upload" { return send_respone(&mut stream, format_response(400, "va?")); };
 
-            let file_length = match request_data.get("content-length") {
+            let file_length = match request_headers.get("content-length") {
                 Some(string) => {
                     match string.parse::<usize>() {
                         Ok(number) => number,
@@ -166,6 +172,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
             let mut buffer = vec![0; file_length];
             let try_read = stream.read_exact(&mut buffer);
             if try_read.is_err() {
+                //println!("{:#?}", buffer);
                 println!("transfer error: {}", try_read.unwrap_err());
                 return send_respone(&mut stream, format_response(200, "hejsan"));
             }
