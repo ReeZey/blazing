@@ -7,7 +7,8 @@ use rhai::{Engine, packages::Package};
 use rhai_fs::FilesystemPackage;
 use config::Config;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let settings = Config::builder()
         .add_source(config::File::with_name("settings"))
         .add_source(config::Environment::with_prefix("APP"))
@@ -15,9 +16,9 @@ fn main() {
         .unwrap();
 
     let config: HashMap<String, String> = settings.try_deserialize::<HashMap<String, String>>().unwrap();
-    let public = config.get("root_location").expect("can't find root location  variable");
+    let public = get_config(&config, "root_location");
 
-    if !Path::new(public).exists() {
+    if !Path::new(&public).exists() {
         fs::create_dir(public).unwrap();
     }
     let binding_ip = get_config(&config, "ip");
@@ -27,12 +28,16 @@ fn main() {
     loop {
         match server.accept() {
             Ok((stream, socket)) => {
-                handle_connection(stream, socket, config.clone());
+                let config = config.clone();
+                tokio::task::spawn(async move {
+                    handle_connection(stream, socket, config);
+                });
             },
             Err(e) => {
                 println!("something bad happened idk err: {}", e.to_string());
             },
         }
+        
     }
 }
 
@@ -159,7 +164,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
             if get_config(&config, "enable_uploads") != "true" { return send_respone(&mut stream, format_response(444, "not enabled")); };
             if http_path != "/upload" { return send_respone(&mut stream, format_response(400, "va?")); };
 
-            let file_length = match request_headers.get("content-length") {
+            let mut file_length = match request_headers.get("content-length") {
                 Some(string) => {
                     match string.parse::<usize>() {
                         Ok(number) => number,
@@ -170,26 +175,13 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
             };
 
             if file_length == 0 { return send_respone(&mut stream, format_response(411, "length is zero")); }
-            if file_length > 50_000_000 { return send_respone(&mut stream, format_response(413, "file is larger than 50mb")); }
+            //if file_length > 50_000_000 { return send_respone(&mut stream, format_response(413, "file is larger than 50mb")); }
 
-            let mut buffer = vec![0; file_length];
-            let try_read = stream.read_exact(&mut buffer);
-            if try_read.is_err() {
-                //println!("{:#?}", buffer);
-                println!("transfer error: {}", try_read.unwrap_err());
-                return send_respone(&mut stream, format_response(200, "hejsan"));
-            }
-
-            let extension = match infer::get(&buffer) {
-                Some(mime) => mime.extension(),
-                None => "bin",
-            };
-
-            let filename: String = rand::thread_rng()
-                                .sample_iter(&Alphanumeric)
-                                .take(8)
-                                .map(char::from)
-                                .collect();
+            let file_id: String = rand::thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(8)
+                .map(char::from)
+                .collect();
 
             let directory = get_config(&config, "uploads_location");
             let path = Path::new(&directory);
@@ -198,12 +190,29 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
                 fs::create_dir_all(path).expect("could not create paths for uploads_location");
             }
 
-            let path_buf: PathBuf = path.join(format!("{filename}.{extension}"));
+            let mut buffer = vec![0; 65483];
+            let mut count = stream.read(&mut buffer).unwrap();
+            file_length -= count;
+
+            let extension = match infer::get(&buffer) {
+                Some(mime) => mime.extension(),
+                None => "bin",
+            };
+            let filename = format!("{file_id}.{extension}");
+            let path_buf: PathBuf = path.join(&filename);
             let mut file = File::create(&path_buf).expect("could not create file");
+            file.write_all(&buffer[0..count]).unwrap();
 
-            file.write_all(&mut buffer).expect("could not write file");
-
-            return send_respone(&mut stream, format_response(200, &path_buf.as_path().to_str().unwrap()));
+            while file_length > 0 {
+                count = stream.read(&mut buffer).unwrap();
+                if count == 0 { break; }
+                file.write_all(&buffer[0..count]).unwrap();
+                file_length -= count;
+                //println!("{}", count);
+            }
+            
+            file.flush().unwrap();
+            return send_respone(&mut stream, format_response(200, &filename));
         },
         _ => {}
     }
