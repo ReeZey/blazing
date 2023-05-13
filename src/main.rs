@@ -56,6 +56,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
     if stuffs.len() != 3 { return send_respone(&mut stream, format_error(400, "wrongful usage majj")); };
 
     let [protocol, http_path, _http]: [&str; 3] = stuffs.try_into().unwrap();
+    //println!("http: {}", _http);
 
     let mut request_headers: HashMap<String, String> = HashMap::new();
     for request in &http_request {
@@ -83,9 +84,12 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
 
     match protocol {
         "GET" => {
+            /*
             if file.len() > 0 && file_path.is_dir() && !file.ends_with("/") {
+                println!("what? {}", format!("{}/", &file));
                 return redirect(&mut stream, &format!("{}/", &file));
             }
+            */
 
             if !file_path.exists() {
                 return send_respone(&mut stream, format_error(404, "file not found"));
@@ -95,7 +99,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
             }
             
             let indexed_file = file_path.join("index.html");
-            if file_path.is_dir() {
+            if file_path.is_dir() && file.ends_with("/") {
                 if file_path.join(".hidden").exists() {
                     return send_respone(&mut stream, format_error(403, "access denied"));
                 }
@@ -104,10 +108,6 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
                     file_path = &indexed_file;
                 } else {
                     let parent_dir = indexed_file.parent().unwrap();
-        
-                    if !parent_dir.exists() {
-                        return send_respone(&mut stream, format_error(404, "folder not found"));
-                    }
 
                     let mut template_html = fs::read_to_string(Path::new("template.html")).unwrap();
                     let mut build_html = String::new();
@@ -126,7 +126,12 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
                     return send_respone(&mut stream, format_response(200, &template_html));
                 }
             }
-        
+
+            if file_path.is_dir() {
+                return send_respone(&mut stream, format_error(400, "expected file found folder"));
+                //return redirect(&mut stream, "https://example.com");
+            }
+
             match file_path.extension() {
                 Some(ext) => {
                     if ext == "rhai" {
@@ -136,7 +141,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
                         package.register_into_engine(&mut engine);
 
                         engine.register_fn("hello", |who: String| -> String {
-                            println!("hello {}", who);
+                            //println!("hello {}", who);
 
                             return format!("you are welcome {who}!");
                         });
@@ -197,14 +202,17 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
                 fs::create_dir_all(path).expect("could not create paths for uploads_location");
             }
 
-            let mut buffer = vec![0; 65483];
+            let mut buffer = vec![0; 1_000_000];
             let mut count = stream.read(&mut buffer).unwrap();
             file_length -= count;
+
+            //println!("{:?}", &buffer[0..20]);
 
             let extension = match infer::get(&buffer) {
                 Some(mime) => mime.extension(),
                 None => "bin",
             };
+            
             let filename = format!("{file_id}.{extension}");
             let path_buf: PathBuf = path.join(&filename);
             let mut file = File::create(&path_buf).expect("could not create file");
@@ -215,7 +223,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
                 if count == 0 { break; }
                 file.write_all(&buffer[0..count]).unwrap();
                 file_length -= count;
-                //println!("{}", count);
+                //println!("{} nom {}", count, file_length);
             }
             
             file.flush().unwrap();
@@ -225,9 +233,13 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
     }
 }
 
+/*
+TODO: fix brokie
 fn redirect(stream: &mut TcpStream, url: &str) {
-    stream.write_all(&format!("HTTP/1.1 302\r\nLocation: {}", url).as_bytes().to_vec()).unwrap();
+    println!("{}", url);
+    stream.write_all(&format!("HTTP/1.1 301 Moved Permanently\r\nLocation: {}", url).as_bytes().to_vec()).unwrap();
 }
+*/
 
 fn format_response(status: i32, response: &str) -> HTTPResponse {
     let mut http_response = HTTPResponse::default();
@@ -252,9 +264,9 @@ fn format_error(status: i32, response: &str) -> HTTPResponse {
     let mut template_html = fs::read_to_string(Path::new("template.html")).unwrap();
     template_html = template_html.replace("{title}", response);
 
-    let mut build_html = format!("<p class='header'>{} {}</p>", status_string, response);
-    build_html += &format!("<img src='http://cats.reez.it/{}' style='max-width: 100%;'></img>", status_string);
+    let mut build_html = format!("<p class='header'>error {}<br>{}</p>", status_string, response);
+    build_html += &format!("<img src='https://cats.reez.it/{}' style='max-width: 100%;'></img>", status_string);
 
     template_html = template_html.replace("{content}", &build_html);
-    return format_response(418, &template_html);
+    return format_response(status, &template_html);
 }
