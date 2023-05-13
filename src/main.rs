@@ -1,6 +1,6 @@
 mod http_data;
 
-use std::{net::{TcpStream, TcpListener, SocketAddr}, io::{Write, BufReader, BufRead, Read}, path::{Path, PathBuf}, fs::{File, self}, collections::HashMap};
+use std::{net::{TcpStream, TcpListener, SocketAddr}, io::{Write, BufReader, BufRead, Read}, path::{Path, PathBuf}, fs::{File, self}, collections::HashMap, println};
 use http_data::HTTPResponse;
 use rand::{Rng, distributions::Alphanumeric};
 use rhai::{Engine, packages::Package};
@@ -51,9 +51,9 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
 
     //println!("{:#?}", http_request);
 
-    if http_request.len() == 0 { return send_respone(&mut stream, format_response(204, "")); };
+    if http_request.len() == 0 { return send_respone(&mut stream, format_error(204, "you send nothing?")); };
     let stuffs: Vec<&str> = http_request[0].split(" ").collect();
-    if stuffs.len() != 3 { return send_respone(&mut stream, format_response(400, "wrongful usage majj")); };
+    if stuffs.len() != 3 { return send_respone(&mut stream, format_error(400, "wrongful usage majj")); };
 
     let [protocol, http_path, _http]: [&str; 3] = stuffs.try_into().unwrap();
 
@@ -61,7 +61,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
     for request in &http_request {
         let req = request.split(":").collect::<Vec<&str>>();
         if req.len() != 2 { continue; }
-        if request_headers.contains_key(req[0]) { return send_respone(&mut stream, format_response(400, "header existed twice"))};
+        if request_headers.contains_key(req[0]) { return send_respone(&mut stream, format_error(400, "header existed twice"))};
 
         request_headers.insert(req[0].to_lowercase().to_owned(), req[1].trim_start().to_owned());
     }
@@ -86,20 +86,31 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
             if file.len() > 0 && file_path.is_dir() && !file.ends_with("/") {
                 return redirect(&mut stream, &format!("{}/", &file));
             }
+
+            if !file_path.exists() {
+                return send_respone(&mut stream, format_error(404, "file not found"));
+            }
+            if file_path.file_name().is_some() && file_path.file_name().unwrap() == ".hidden" {
+                return send_respone(&mut stream, format_error(404, "file not found"));
+            }
             
             let indexed_file = file_path.join("index.html");
             if file_path.is_dir() {
+                if file_path.join(".hidden").exists() {
+                    return send_respone(&mut stream, format_error(403, "access denied"));
+                }
+
                 if indexed_file.exists() {
                     file_path = &indexed_file;
-                }else {
+                } else {
                     let parent_dir = indexed_file.parent().unwrap();
         
                     if !parent_dir.exists() {
-                        return send_respone(&mut stream, format_response(404, "folder not found"));
+                        return send_respone(&mut stream, format_error(404, "folder not found"));
                     }
 
                     let mut template_html = fs::read_to_string(Path::new("template.html")).unwrap();
-                    let mut build_html = "".to_string();
+                    let mut build_html = String::new();
                     for dir in parent_dir.read_dir().unwrap() {
                         let directior = dir.unwrap();
         
@@ -114,10 +125,6 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
                     template_html = template_html.replace("{content}", &build_html);
                     return send_respone(&mut stream, format_response(200, &template_html));
                 }
-            }
-        
-            if !file_path.exists() {
-                return send_respone(&mut stream, format_response(404, "file not found"));
             }
         
             match file_path.extension() {
@@ -142,7 +149,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
                             }
                             Err(e) => {
                                 println!("err: {e}");
-                                return send_respone(&mut stream, format_response(500, "error compile"));
+                                return send_respone(&mut stream, format_error(500, "error compile rhai"));
                             }
                         }
                     }
@@ -161,8 +168,8 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
         },
         "PUT" => {
             //get_config
-            if get_config(&config, "enable_uploads") != "true" { return send_respone(&mut stream, format_response(444, "not enabled")); };
-            if http_path != "/upload" { return send_respone(&mut stream, format_response(400, "va?")); };
+            if get_config(&config, "enable_uploads") != "true" { return send_respone(&mut stream, format_error(444, "not enabled")); };
+            if http_path != "/upload" { return send_respone(&mut stream, format_error(400, "where are you going?")); };
 
             let mut file_length = match request_headers.get("content-length") {
                 Some(string) => {
@@ -174,7 +181,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
                 None => 0,
             };
 
-            if file_length == 0 { return send_respone(&mut stream, format_response(411, "length is zero")); }
+            if file_length == 0 { return send_respone(&mut stream, format_error(411, "length is zero")); }
             //if file_length > 50_000_000 { return send_respone(&mut stream, format_response(413, "file is larger than 50mb")); }
 
             let file_id: String = rand::thread_rng()
@@ -237,4 +244,17 @@ fn send_respone(stream: &mut TcpStream, data: HTTPResponse) {
 
 fn get_config(config: &HashMap<String, String>, key: &str) -> String {
     return config.get(&key.to_owned()).expect(&format!("could not find config key {}, did you possibly delete it?", key)).to_owned();
+}
+
+fn format_error(status: i32, response: &str) -> HTTPResponse {
+    let status_string = status.to_string();
+
+    let mut template_html = fs::read_to_string(Path::new("template.html")).unwrap();
+    template_html = template_html.replace("{title}", response);
+
+    let mut build_html = format!("<p class='header'>{} {}</p>", status_string, response);
+    build_html += &format!("<img src='http://cats.reez.it/{}' style='max-width: 100%;'></img>", status_string);
+
+    template_html = template_html.replace("{content}", &build_html);
+    return format_response(418, &template_html);
 }
