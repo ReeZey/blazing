@@ -1,0 +1,38 @@
+@import url('https://fonts.googleapis.com/css2?family=Comic+Neue&display=swap');
+* {
+    margin: 0px;
+    padding: 0px;
+    font-family: 'Comic Neue';
+    color: white;
+    word-wrap: anywhere;
+    transition: all 0.2s;
+}
+
+body {
+    background-color: #110010;
+}
+
+.center {
+    margin: 0;
+    position: absolute;
+    text-align: center;
+    width: 80vw;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, max(-50vh, -50%));
+}
+
+a {
+    color: purple;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+    transform: scale(1.5);
+    color: magenta;
+}
+
+.header {
+    font-size: 3em;
+}

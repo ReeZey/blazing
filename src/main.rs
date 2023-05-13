@@ -20,8 +20,9 @@ fn main() {
     if !Path::new(public).exists() {
         fs::create_dir(public).unwrap();
     }
-    
-    let server = TcpListener::bind("0.0.0.0:51413").expect("could not start server");
+    let binding_ip = get_config(&config, "ip");
+    let port = get_config(&config, "port");
+    let server = TcpListener::bind(format!("{binding_ip}:{port}")).expect("could not start server");
 
     loop {
         match server.accept() {
@@ -91,9 +92,9 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
                     if !parent_dir.exists() {
                         return send_respone(&mut stream, format_response(404, "folder not found"));
                     }
-        
-                    let mut build_html: String = "<!DOCTYPE html>\r\n".to_owned();
-                    build_html += "<a href='../'>..</a>\r\n";
+
+                    let mut template_html = fs::read_to_string(Path::new("template.html")).unwrap();
+                    let mut build_html = "".to_string();
                     for dir in parent_dir.read_dir().unwrap() {
                         let directior = dir.unwrap();
         
@@ -104,7 +105,9 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
                         }
                         build_html += &format!("<a href='{0}'>{0}</a> ", name);
                     }
-                    return send_respone(&mut stream, format_response(200, &build_html));
+                    template_html = template_html.replace("{title}", &file);
+                    template_html = template_html.replace("{content}", &build_html);
+                    return send_respone(&mut stream, format_response(200, &template_html));
                 }
             }
         
