@@ -53,7 +53,8 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
 
     if http_request.len() == 0 { return send_respone(&mut stream, format_error(204, "you send nothing?")); };
     let stuffs: Vec<&str> = http_request[0].split(" ").collect();
-    if stuffs.len() != 3 { return send_respone(&mut stream, format_error(400, "wrongful usage majj")); };
+    //println!("length is {:#?}",stuffs);
+    if stuffs.len() != 3 { return send_respone(&mut stream, format_error(400, "something was bad 🤷‍♂️")); };
 
     let [protocol, http_path, _http]: [&str; 3] = stuffs.try_into().unwrap();
     //println!("http: {}", _http);
