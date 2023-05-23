@@ -1,11 +1,12 @@
 mod http_data;
 
-use std::{net::{TcpStream, TcpListener, SocketAddr}, io::{Write, BufReader, BufRead, Read}, path::{Path, PathBuf}, fs::{File, self}, collections::HashMap, println};
+use std::{net::{TcpStream, TcpListener, SocketAddr}, io::{Write, BufReader, BufRead, Read}, path::{Path, PathBuf}, fs::{File, self}, collections::HashMap, println, time::{SystemTime, UNIX_EPOCH}};
 use http_data::HTTPResponse;
 use rand::{Rng, distributions::Alphanumeric};
 use rhai::{Engine, packages::Package};
 use rhai_fs::FilesystemPackage;
 use config::Config;
+use rusqlite::Connection;
 
 #[tokio::main]
 async fn main() {
@@ -21,6 +22,14 @@ async fn main() {
     if !Path::new(&public).exists() {
         fs::create_dir(public).unwrap();
     }
+
+    let enable_metrics: bool = get_config(&config, "enable_metrics").parse().unwrap();
+    if enable_metrics {
+        let metric_location = get_config(&config, "metrics_location");
+        let conn = Connection::open(metric_location).unwrap();
+        setup_db(&conn);
+    }
+
     let binding_ip = get_config(&config, "ip");
     let port = get_config(&config, "port");
     let server = TcpListener::bind(format!("{binding_ip}:{port}")).expect("could not start server");
@@ -52,22 +61,31 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
     //println!("{:#?}", http_request);
 
     if http_request.len() == 0 { return send_respone(&mut stream, format_error(204, "you send nothing?")); };
-    let stuffs: Vec<&str> = http_request[0].split(" ").collect();
-    //println!("length is {:#?}",stuffs);
-    if stuffs.len() != 3 { return send_respone(&mut stream, format_error(400, "something was bad 🤷‍♂️")); };
-
-    let [protocol, http_path, _http]: [&str; 3] = stuffs.try_into().unwrap();
-    //println!("http: {}", _http);
+    
+    //dont look at this, i dont like HTTP
+    //thanks chatgpt
+    let mut parts = http_request[0].splitn(2, ' ');
+    let first_part = parts.next().unwrap();
+    let last_part = parts.next().unwrap();
+    let mut last_parts = last_part.rsplitn(2, ' ');
+    let _http = last_parts.next().unwrap();
+    let protocol = first_part.trim();
+    let http_path = last_parts.next().unwrap().trim();
 
     let mut request_headers: HashMap<String, String> = HashMap::new();
     for request in &http_request {
-        let req = request.split(":").collect::<Vec<&str>>();
-        if req.len() != 2 { continue; }
-        if request_headers.contains_key(req[0]) { return send_respone(&mut stream, format_error(400, "header existed twice"))};
-
-        request_headers.insert(req[0].to_lowercase().to_owned(), req[1].trim_start().to_owned());
-    }
-    //println!("{:#?}", request_data);
+        match request.split_once(":") {
+            Some((key, value)) => {
+                if request_headers.contains_key(key) { 
+                    return send_respone(&mut stream, format_error(400, "header existed twice"))
+                };
+                
+                request_headers.insert(key.to_lowercase().to_owned(), value.trim_start().to_owned());
+            }
+            None => {}
+        };
+    };
+    //println!("headers: {:#?}", request_headers);
 
     let root_location = get_config(&config, "root_location");
     let file = urlencoding::decode(&http_path).unwrap().into_owned();
@@ -82,6 +100,28 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
     };
 
     println!("{} -> {} {}", ip, protocol, file);
+
+    let enable_metrics: bool = get_config(&config, "enable_metrics").parse().unwrap();
+    if enable_metrics {
+        let metric_location = get_config(&config, "metrics_location");
+        let conn = Connection::open(metric_location).unwrap();
+
+        let user_agent = if let Some(user_agent) = request_headers.get("user-agent") {
+            user_agent
+        } else {
+            "unknown"
+        };
+
+        let unix_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
+        conn.execute(
+            "INSERT INTO metrics (location, user_agent, ip, date) VALUES (?1, ?2, ?3, ?4)",
+            (&http_path, user_agent, &ip, unix_time as i64),
+        ).unwrap();
+    }
 
     match protocol {
         "GET" => {
@@ -174,8 +214,12 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
         },
         "PUT" => {
             //get_config
-            if get_config(&config, "enable_uploads") != "true" { return send_respone(&mut stream, format_error(444, "not enabled")); };
-            if http_path != "/upload" { return send_respone(&mut stream, format_error(400, "where are you going?")); };
+            if get_config(&config, "enable_uploads").parse().unwrap() { 
+                return send_respone(&mut stream, format_error(444, "not enabled"));
+            };
+            if http_path != "/upload" { 
+                return send_respone(&mut stream, format_error(400, "where are you going?")); 
+            };
 
             let mut file_length = match request_headers.get("content-length") {
                 Some(string) => {
@@ -230,7 +274,9 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
             file.flush().unwrap();
             return send_respone(&mut stream, format_response(200, &filename));
         },
-        _ => {}
+        _ => {
+            return send_respone(&mut stream, format_response(405, "mitä? 🇫🇮"))
+        }
     }
 }
 
@@ -270,4 +316,17 @@ fn format_error(status: i32, response: &str) -> HTTPResponse {
 
     template_html = template_html.replace("{content}", &build_html);
     return format_response(status, &template_html);
+}
+
+fn setup_db(conn: &Connection) {
+    conn.execute("CREATE TABLE IF NOT EXISTS metrics (
+            id INTEGER UNIQUE,
+            location TEXT,
+            user_agent TEXT,
+            ip TEXT,
+            date DATETIME,
+            PRIMARY KEY(id AUTOINCREMENT)
+        )",
+        (), // empty list of parameters.
+    ).unwrap();
 }

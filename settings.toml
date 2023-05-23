@@ -1,9 +1,13 @@
-#where to store files
-root_location = "public"
+#root
+root_location = "public" #where to store files
 
+#uploads
 enable_uploads = true
-#where to put uploads
-uploads_location = "public/upload"
+uploads_location = "public/upload" #where to put uploads
+
+#metrics
+enable_metrics = true
+metrics_location = "metrics.db" #where to put sqlite metrics
 
 #binding stuff
 ip = "0.0.0.0"
