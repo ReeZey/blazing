@@ -10,28 +10,26 @@ use rusqlite::Connection;
 
 #[tokio::main]
 async fn main() {
-    let settings = Config::builder()
+    let config = Config::builder()
         .add_source(config::File::with_name("settings"))
         .add_source(config::Environment::with_prefix("APP"))
         .build()
         .unwrap();
 
-    let config: HashMap<String, String> = settings.try_deserialize::<HashMap<String, String>>().unwrap();
-    let public = get_config(&config, "root_location");
-
-    if !Path::new(&public).exists() {
-        fs::create_dir(public).unwrap();
+    let public_path = config.get_string("root_location").unwrap();
+    if !Path::new(&public_path).exists() {
+        fs::create_dir(public_path).unwrap();
     }
 
-    let enable_metrics: bool = get_config(&config, "enable_metrics").parse().unwrap();
+    let enable_metrics = config.get_bool("enable_metrics").unwrap();
     if enable_metrics {
-        let metric_location = get_config(&config, "metrics_location");
+        let metric_location = config.get_string("metrics_location").unwrap();
         let conn = Connection::open(metric_location).unwrap();
         setup_db(&conn);
     }
 
-    let binding_ip = get_config(&config, "ip");
-    let port = get_config(&config, "port");
+    let binding_ip = config.get_string("ip").unwrap();
+    let port = config.get_string("port").unwrap();
     let server = TcpListener::bind(format!("{binding_ip}:{port}")).expect("could not start server");
 
     loop {
@@ -50,7 +48,7 @@ async fn main() {
     }
 }
 
-fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<String, String>) {
+fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) {
     let buf_reader = BufReader::new(&mut stream);
     let http_request: Vec<_> = buf_reader
         .lines()
@@ -79,7 +77,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
                 if request_headers.contains_key(key) { 
                     return send_respone(&mut stream, format_error(400, "header existed twice"))
                 };
-                
+
                 request_headers.insert(key.to_lowercase().to_owned(), value.trim_start().to_owned());
             }
             None => {}
@@ -87,7 +85,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
     };
     //println!("headers: {:#?}", request_headers);
 
-    let root_location = get_config(&config, "root_location");
+    let root_location = config.get_string("root_location").unwrap();
     let file = urlencoding::decode(&http_path).unwrap().into_owned();
     let file_string = format!("{}{}", root_location, file);
     let mut file_path = Path::new(&file_string);
@@ -101,9 +99,9 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
 
     println!("{} -> {} {}", ip, protocol, file);
 
-    let enable_metrics: bool = get_config(&config, "enable_metrics").parse().unwrap();
+    let enable_metrics: bool = config.get_bool("enable_metrics").unwrap();
     if enable_metrics {
-        let metric_location = get_config(&config, "metrics_location");
+        let metric_location = config.get_string("metrics_location").unwrap();
         let conn = Connection::open(metric_location).unwrap();
 
         let user_agent = if let Some(user_agent) = request_headers.get("user-agent") {
@@ -125,13 +123,6 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
 
     match protocol {
         "GET" => {
-            /*
-            if file.len() > 0 && file_path.is_dir() && !file.ends_with("/") {
-                println!("what? {}", format!("{}/", &file));
-                return redirect(&mut stream, &format!("{}/", &file));
-            }
-            */
-
             if !file_path.exists() {
                 return send_respone(&mut stream, format_error(404, "file not found"));
             }
@@ -214,7 +205,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
         },
         "PUT" => {
             //get_config
-            if get_config(&config, "enable_uploads").parse().unwrap() { 
+            if config.get_bool("enable_uploads").unwrap() { 
                 return send_respone(&mut stream, format_error(444, "not enabled"));
             };
             if http_path != "/upload" { 
@@ -240,7 +231,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: HashMap<
                 .map(char::from)
                 .collect();
 
-            let directory = get_config(&config, "uploads_location");
+            let directory = config.get_string("uploads_location").unwrap();
             let path = Path::new(&directory);
 
             if !path.exists() {
@@ -299,10 +290,6 @@ fn send_respone(stream: &mut TcpStream, data: HTTPResponse) {
     if stream.write_all(&data.format()).is_err() {
         drop(stream);
     }
-}
-
-fn get_config(config: &HashMap<String, String>, key: &str) -> String {
-    return config.get(&key.to_owned()).expect(&format!("could not find config key {}, did you possibly delete it?", key)).to_owned();
 }
 
 fn format_error(status: i32, response: &str) -> HTTPResponse {
