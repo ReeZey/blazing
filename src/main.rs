@@ -266,7 +266,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
             return send_respone(&mut stream, format_response(200, &filename));
         },
         _ => {
-            return send_respone(&mut stream, format_response(405, "mitä? 🇫🇮"))
+            return send_respone(&mut stream, format_error(405, "mitä? 🇫🇮"))
         }
     }
 }
@@ -302,6 +302,14 @@ fn format_error(status: i32, response: &str) -> HTTPResponse {
     build_html += &format!("<img src='https://cats.reez.it/{}' style='max-width: 100%;'></img>", status_string);
 
     template_html = template_html.replace("{content}", &build_html);
+    return format_response(status, &template_html);
+}
+
+#[allow(dead_code)]
+fn format_http_response(status: i32, response: &str) -> HTTPResponse {
+    let mut template_html = fs::read_to_string(Path::new("template.html")).unwrap();
+    template_html = template_html.replace("{title}", response);
+    template_html = template_html.replace("{content}", response);
     return format_response(status, &template_html);
 }
 
