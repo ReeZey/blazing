@@ -23,14 +23,19 @@ body {
 }
 
 a {
-    color: purple;
+    color: #aa00ff;
     text-decoration: none;
+    font-size: 1.2em;
+}
+
+p {
+    font-size: 1.2em;
 }
 
 a:hover {
     text-decoration: underline;
     transform: scale(1.5);
-    color: magenta;
+    color: white;
 }
 
 .header {
@@ -43,4 +48,6 @@ a:hover {
     bottom: 20px;
     transform: translate(-50%, -50%);
     margin: 0 auto;
+
+    text-align: center;
 }

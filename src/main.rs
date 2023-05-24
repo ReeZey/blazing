@@ -99,8 +99,9 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
 
     println!("{} -> {} {}", ip, protocol, file);
 
-    let enable_metrics: bool = config.get_bool("enable_metrics").unwrap();
-    if enable_metrics {
+    dbg!("hej");
+    
+    if config.get_bool("enable_metrics").unwrap() {
         let metric_location = config.get_string("metrics_location").unwrap();
         let conn = Connection::open(metric_location).unwrap();
 
@@ -164,17 +165,19 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
                 //return redirect(&mut stream, "https://example.com");
             }
 
-            match file_path.extension() {
-                Some(ext) => {
-                    if ext == "rhai" {
+            /*
+            TODO: compression
+            */
+            let extension = file_path.extension();
+            if extension.is_some() {
+                match extension.unwrap().to_string_lossy().to_lowercase().as_str() {
+                    "rhai" => {
                         let mut engine = Engine::new();
         
                         let package = FilesystemPackage::new();
                         package.register_into_engine(&mut engine);
 
                         engine.register_fn("hello", |who: String| -> String {
-                            //println!("hello {}", who);
-
                             return format!("you are welcome {who}!");
                         });
         
@@ -190,14 +193,14 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
                             }
                         }
                     }
+                    _ => {}
                 }
-                None => {}
             }
         
             let mut buffer = vec![];
             let mut file = File::open(&file_path).unwrap();
             file.read_to_end(&mut buffer).unwrap();
-        
+            
             let mut http_response = HTTPResponse::default();
             http_response.buffer = buffer;
         
@@ -223,7 +226,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
             };
 
             if file_length == 0 { return send_respone(&mut stream, format_error(411, "length is zero")); }
-            //if file_length > 50_000_000 { return send_respone(&mut stream, format_response(413, "file is larger than 50mb")); }
+            if file_length > 50_000_000 { return send_respone(&mut stream, format_response(413, "file is larger than 50mb")); }
 
             let file_id: String = rand::thread_rng()
                 .sample_iter(&Alphanumeric)
