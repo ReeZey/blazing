@@ -1,4 +1,5 @@
 mod http_data;
+mod utils;
 
 use std::{net::{TcpStream, TcpListener, SocketAddr}, io::{Write, BufReader, BufRead, Read}, path::{Path, PathBuf}, fs::{File, self}, collections::HashMap, println, time::{SystemTime, UNIX_EPOCH}};
 use http_data::HTTPResponse;
@@ -7,6 +8,7 @@ use rhai::{Engine, packages::Package};
 use rhai_fs::FilesystemPackage;
 use config::Config;
 use rusqlite::Connection;
+use utils::{setup_db, format_error, format_response, send_respone};
 
 #[tokio::main]
 async fn main() {
@@ -68,7 +70,11 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
     let mut last_parts = last_part.rsplitn(2, ' ');
     let _http = last_parts.next().unwrap();
     let protocol = first_part.trim();
-    let http_path = last_parts.next().unwrap().trim();
+    let path_and_query = last_parts.next().unwrap().trim().split_once("?").unwrap();
+    let http_path = path_and_query.0;
+    let query = path_and_query.1;
+
+    println!("{}", query);
 
     let mut request_headers: HashMap<String, String> = HashMap::new();
     for request in &http_request {
@@ -98,8 +104,6 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
     };
 
     println!("{} -> {} {}", ip, protocol, file);
-
-    dbg!("hej");
     
     if config.get_bool("enable_metrics").unwrap() {
         let metric_location = config.get_string("metrics_location").unwrap();
@@ -272,59 +276,4 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
             return send_respone(&mut stream, format_error(405, "mitä? 🇫🇮"))
         }
     }
-}
-
-/*
-TODO: fix brokie
-fn redirect(stream: &mut TcpStream, url: &str) {
-    println!("{}", url);
-    stream.write_all(&format!("HTTP/1.1 301 Moved Permanently\r\nLocation: {}", url).as_bytes().to_vec()).unwrap();
-}
-*/
-
-fn format_response(status: i32, response: &str) -> HTTPResponse {
-    let mut http_response = HTTPResponse::default();
-    http_response.status = status;
-    http_response.buffer = response.as_bytes().to_vec();
-    return http_response;
-}
-
-fn send_respone(stream: &mut TcpStream, data: HTTPResponse) {
-    if stream.write_all(&data.format()).is_err() {
-        drop(stream);
-    }
-}
-
-fn format_error(status: i32, response: &str) -> HTTPResponse {
-    let status_string = status.to_string();
-
-    let mut template_html = fs::read_to_string(Path::new("template.html")).unwrap();
-    template_html = template_html.replace("{title}", response);
-
-    let mut build_html = format!("<p class='header'>error {}<br>{}</p>", status_string, response);
-    build_html += &format!("<img src='https://cats.reez.it/{}' style='max-width: 100%;'></img>", status_string);
-
-    template_html = template_html.replace("{content}", &build_html);
-    return format_response(status, &template_html);
-}
-
-#[allow(dead_code)]
-fn format_http_response(status: i32, response: &str) -> HTTPResponse {
-    let mut template_html = fs::read_to_string(Path::new("template.html")).unwrap();
-    template_html = template_html.replace("{title}", response);
-    template_html = template_html.replace("{content}", response);
-    return format_response(status, &template_html);
-}
-
-fn setup_db(conn: &Connection) {
-    conn.execute("CREATE TABLE IF NOT EXISTS metrics (
-            id INTEGER UNIQUE,
-            location TEXT,
-            user_agent TEXT,
-            ip TEXT,
-            date DATETIME,
-            PRIMARY KEY(id AUTOINCREMENT)
-        )",
-        (), // empty list of parameters.
-    ).unwrap();
 }
