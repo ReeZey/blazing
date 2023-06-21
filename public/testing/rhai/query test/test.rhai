@@ -1,2 +1,1 @@
-let test = hello("rhai");
-return test;
+return get_query_parameters();

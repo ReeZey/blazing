@@ -70,11 +70,38 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
     let mut last_parts = last_part.rsplitn(2, ' ');
     let _http = last_parts.next().unwrap();
     let protocol = first_part.trim();
-    let path_and_query = last_parts.next().unwrap().trim().split_once("?").unwrap();
-    let http_path = path_and_query.0;
-    let query = path_and_query.1;
 
-    println!("{}", query);
+    let request_http = last_parts.next().unwrap().trim();
+
+    let (http_path, mut entire_query) = match request_http.split_once("?") {
+        Some(path_and_query) => {
+            path_and_query
+        }
+        None => {
+            (request_http, "")
+        },
+    };
+
+    let mut query_params: HashMap<&str, Option<&str>> = HashMap::new();
+
+    if entire_query.len() > 0 {
+        for query in entire_query.split("&") {
+            let (key, value) = match query.split_once("=") {
+                Some((key, value)) => {
+                    (key, Some(value))
+                }
+                None => {
+                    (query, None)
+                }
+            };
+
+            if query_params.contains_key(key) {
+                return send_respone(&mut stream, format_error(400, "param key already found"));
+            }
+
+            query_params.insert(key, value);
+        }
+    }
 
     let mut request_headers: HashMap<String, String> = HashMap::new();
     for request in &http_request {
@@ -97,10 +124,9 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
     let mut file_path = Path::new(&file_string);
 
     let socket_ip = socket.ip().to_string();
-    let ip = if let Some(header_ip) = request_headers.get("x-real-ip") {
-        header_ip
-    }else {
-        &socket_ip
+    let ip = match request_headers.get("x-real-ip") {
+        Some(ip) => ip,
+        None => &socket_ip
     };
 
     println!("{} -> {} {}", ip, protocol, file);
@@ -109,10 +135,9 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
         let metric_location = config.get_string("metrics_location").unwrap();
         let conn = Connection::open(metric_location).unwrap();
 
-        let user_agent = if let Some(user_agent) = request_headers.get("user-agent") {
-            user_agent
-        } else {
-            "unknown"
+        let user_agent = match request_headers.get("user-agent") {
+            Some(user_agent) => user_agent,
+            None => "unknown"
         };
 
         let unix_time = SystemTime::now()
@@ -181,10 +206,11 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
                         let package = FilesystemPackage::new();
                         package.register_into_engine(&mut engine);
 
-                        engine.register_fn("hello", |who: String| -> String {
-                            return format!("you are welcome {who}!");
+                        let abc: HashMap<&str, Option<&str>> = query_params.clone();
+                        engine.register_fn("get_query_parameters", || -> HashMap<&str, Option<&str>> {
+                            return abc;
                         });
-        
+
                         let engine_exec = engine.eval_file::<String>(file_path.to_path_buf());
                         
                         match engine_exec {
