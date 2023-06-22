@@ -4,11 +4,13 @@ mod utils;
 use std::{net::{TcpStream, TcpListener, SocketAddr}, io::{Write, BufReader, BufRead, Read}, path::{Path, PathBuf}, fs::{File, self}, collections::HashMap, println, time::{SystemTime, UNIX_EPOCH}};
 use http_data::HTTPResponse;
 use rand::{Rng, distributions::Alphanumeric};
-use rhai::{Engine, packages::Package};
+use rhai::{Engine, packages::Package, Scope};
 use rhai_fs::FilesystemPackage;
 use config::Config;
 use rusqlite::Connection;
 use utils::{setup_db, format_error, format_response, send_respone};
+
+use crate::utils::format_http_response;
 
 #[tokio::main]
 async fn main() {
@@ -73,7 +75,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
 
     let request_http = last_parts.next().unwrap().trim();
 
-    let (http_path, mut entire_query) = match request_http.split_once("?") {
+    let (http_path, entire_query) = match request_http.split_once("?") {
         Some(path_and_query) => {
             path_and_query
         }
@@ -82,24 +84,24 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
         },
     };
 
-    let mut query_params: HashMap<&str, Option<&str>> = HashMap::new();
+    let mut query_params: HashMap<String, Option<String>> = HashMap::new();
 
     if entire_query.len() > 0 {
         for query in entire_query.split("&") {
             let (key, value) = match query.split_once("=") {
                 Some((key, value)) => {
-                    (key, Some(value))
+                    (urlencoding::decode(key).unwrap().to_string(), Some(urlencoding::decode(value).unwrap().to_string()))
                 }
                 None => {
-                    (query, None)
+                    (urlencoding::decode(query).unwrap().to_string(), None)
                 }
             };
 
-            if query_params.contains_key(key) {
-                return send_respone(&mut stream, format_error(400, "param key already found"));
+            if query_params.contains_key(&key) {
+                return send_respone(&mut stream, format_error(400, "duplicate query parameter"));
             }
 
-            query_params.insert(key, value);
+            query_params.insert(key.to_string(), value.clone());
         }
     }
 
@@ -206,16 +208,30 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
                         let package = FilesystemPackage::new();
                         package.register_into_engine(&mut engine);
 
-                        let abc: HashMap<&str, Option<&str>> = query_params.clone();
-                        engine.register_fn("get_query_parameters", || -> HashMap<&str, Option<&str>> {
-                            return abc;
+                        let mut scope = Scope::new();
+                        scope.push_constant("hashmap", query_params.clone());
+
+                        engine.register_fn("get", |hashmap: HashMap<String, Option<String>>, key: String| -> String {
+                            if !hashmap.contains_key(&key) {
+                                return "".to_owned();
+                            }
+
+                            let hashmap_value = hashmap.get(&key).unwrap().as_ref();
+                            if hashmap_value.is_none() {
+                                return "".to_owned();
+                            }
+
+                            return hashmap_value.unwrap().to_string();
                         });
 
-                        let engine_exec = engine.eval_file::<String>(file_path.to_path_buf());
+                        let engine_exec = engine.eval_file_with_scope::<String>(&mut scope, file_path.to_path_buf());
                         
                         match engine_exec {
                             Ok(contents) => {
-                                return send_respone(&mut stream, format_response(200, &contents));
+                                if query_params.clone().get("raw").is_some() {
+                                    return send_respone(&mut stream, format_response(200, &contents));
+                                }
+                                return send_respone(&mut stream, format_http_response(200, &contents));
                             }
                             Err(e) => {
                                 println!("err: {e}");

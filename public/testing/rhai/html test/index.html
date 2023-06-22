@@ -9,7 +9,7 @@
     <script>
         window.onload = async () => {
             let rhai_input = document.querySelector(".rhai");
-            let response = await fetch("test.rhai");
+            let response = await fetch("test.rhai?raw");
             rhai_input.innerText = await response.text();
         }
     </script>
