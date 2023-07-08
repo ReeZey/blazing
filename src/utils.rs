@@ -39,10 +39,9 @@ pub(crate) fn format_error(status: i32, response: &str) -> HTTPResponse {
     return format_response(status, &template_html);
 }
 
-#[allow(dead_code)]
-pub(crate) fn format_http_response(status: i32, response: &str) -> HTTPResponse {
+pub(crate) fn format_http_response(status: i32, response: &str, title: &str) -> HTTPResponse {
     let mut template_html = fs::read_to_string(Path::new("template.html")).unwrap();
-    template_html = template_html.replace("{title}", response);
+    template_html = template_html.replace("{title}", title);
     template_html = template_html.replace("{content}", response);
     return format_response(status, &template_html);
 }

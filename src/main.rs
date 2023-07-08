@@ -8,9 +8,7 @@ use rhai::{Engine, packages::Package, Scope};
 use rhai_fs::FilesystemPackage;
 use config::Config;
 use rusqlite::Connection;
-use utils::{setup_db, format_error, format_response, send_respone};
-
-use crate::utils::format_http_response;
+use utils::{setup_db, format_error, format_response, send_respone, format_http_response};
 
 #[tokio::main]
 async fn main() {
@@ -104,6 +102,7 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
             query_params.insert(key.to_string(), value.clone());
         }
     }
+    //println!("{:#?}", query_params);
 
     let mut request_headers: HashMap<String, String> = HashMap::new();
     for request in &http_request {
@@ -231,10 +230,13 @@ fn handle_connection(mut stream: TcpStream, socket: SocketAddr, config: Config) 
                                 if query_params.clone().get("raw").is_some() {
                                     return send_respone(&mut stream, format_response(200, &contents));
                                 }
-                                return send_respone(&mut stream, format_http_response(200, &contents));
+                                return send_respone(&mut stream, format_http_response(200, &contents, "rhai execution"));
                             }
                             Err(e) => {
                                 println!("err: {e}");
+                                if query_params.clone().get("raw").is_some() {
+                                    return send_respone(&mut stream, format_response(500, "error compile rhai"));
+                                }
                                 return send_respone(&mut stream, format_error(500, "error compile rhai"));
                             }
                         }
